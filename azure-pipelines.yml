@@ -1,98 +1,74 @@
-# Starter pipeline
-# Start with a minimal pipeline that you can customize to build and deploy your code.
-# Add steps that build, run tests, deploy, and more:
-# https://aka.ms/yaml
+trigger:
+- main
 
-pipeline{
-    agent any
-    tools{
-        jdk 'jdk17'
-        nodejs 'node16'
-    }
-    environment {
-        SCANNER_HOME=tool 'sonar-scanner'
-    }
-    stages {
-        stage('clean workspace'){
-            steps{
-                cleanWs()
-            }
-        }
-        stage('Checkout from Git'){
-            steps{
-<<<<<<< HEAD
-                git branch: 'main', url: 'https://github.com/sachin2815/DevSecOps-CICD-Pipeline-NetflixClone.git'
-=======
-                git branch: 'main', url: 'https://github.com/sachin2815/Netflix-clone-DevSecOps.git'
->>>>>>> 26f4be5e7f7b660bddd872e2b4fed1623e31f3b3
-            }
-        }
-        stage("Sonarqube Analysis "){
-            steps{
-                withSonarQubeEnv('sonar-server') {
-                    sh ''' $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=Netflix \
-                    -Dsonar.projectKey=Netflix '''
-                }
-            }
-        }
-        stage("quality gate"){
-           steps {
-                script {
-                    waitForQualityGate abortPipeline: false, credentialsId: 'Sonar-token'
-                }
-            }
-        }
-        stage('Install Dependencies') {
-            steps {
-                sh "npm install"
-            }
-        }
-        stage('OWASP FS SCAN') {
-            steps {
-                dependencyCheck additionalArguments: '--scan ./ --disableYarnAudit --disableNodeAudit', odcInstallation: 'DP-Check'
-                dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
-            }
-        }
-        stage('TRIVY FS SCAN') {
-            steps {
-                sh "trivy fs . > trivyfs.txt"
-            }
-        }
-        stage("Docker Build & Push"){
-            steps{
-                script{
-                   withDockerRegistry(credentialsId: 'docker', toolName: 'docker'){
-                       sh "docker build --build-arg TMDB_V3_API_KEY=ca86fe14eca3e76864bc17f59d319b92 -t netflix ."
-                       sh "docker tag netflix sachin2815/netflix:latest "
-                       sh "docker push sachin2815/netflix:latest "
-                    }
-                }
-            }
-        }
-        stage("TRIVY"){
-            steps{
-                sh "trivy image sachin28/netflix:latest > trivyimage.txt"
-            }
-        }
-        stage('Deploy to container'){
-            steps{
-<<<<<<< HEAD
-                sh 'docker run -d --name netflix -p 8081:80 sachin28/netflix:latest'
-=======
-                 sh 'docker run -d --name netflix -p 8081:80 sachin2815/netflix:latest'
->>>>>>> 26f4be5e7f7b660bddd872e2b4fed1623e31f3b3
-            }
-        }
-    }
-    post {
-     always {
-        emailext attachLog: true,
-            subject: "'${currentBuild.result}'",
-            body: "Project: ${env.JOB_NAME}<br/>" +
-                "Build Number: ${env.BUILD_NUMBER}<br/>" +
-                "URL: ${env.BUILD_URL}<br/>",
-            to: 'sachin.singh.professional@gmail.com',
-            attachmentsPattern: 'trivyfs.txt,trivyimage.txt'
-        }
-    }
-}
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  SCANNER_HOME: $(SonarScanner)
+
+jobs:
+- job: BuildAndDeploy
+  steps:
+  - task: UseJava@1
+    inputs:
+      versionSpec: '17'
+      jdkArchitectureOption: 'x64'
+  - task: UseNode@1
+    inputs:
+      versionSpec: '16.x'
+  - task: SonarQubePrepare@5
+    inputs:
+      SonarQube: 'sonar-server'
+      scannerMode: 'CLI'
+      configMode: 'manual'
+      cliProjectKey: 'Netflix'
+      cliProjectName: 'Netflix'
+  - script: |
+      git clone https://github.com/sachin2815/Netflix-clone-DevSecOps.git
+    displayName: 'Checkout from Git'
+  - script: |
+      $(SCANNER_HOME)/bin/sonar-scanner
+    displayName: 'SonarQube Analysis'
+  - task: SonarQubeAnalyze@5
+  - task: SonarQubePublish@5
+    inputs:
+      pollingTimeoutSec: '300'
+  - script: |
+      npm install
+    displayName: 'Install Dependencies'
+  - task: DependencyCheck@5
+    inputs:
+      scanPath: './'
+      arguments: '--disableYarnAudit --disableNodeAudit'
+  - script: |
+      trivy fs . > trivyfs.txt
+    displayName: 'Trivy FS Scan'
+  - task: Docker@2
+    inputs:
+      containerRegistry: 'docker'
+      repository: 'sachin2815/netflix'
+      command: 'buildAndPush'
+      Dockerfile: '**/Dockerfile'
+      buildArguments: '--build-arg TMDB_V3_API_KEY=ca86fe14eca3e76864bc17f59d319b92'
+      tags: 'latest'
+  - script: |
+      trivy image sachin2815/netflix:latest > trivyimage.txt
+    displayName: 'Trivy Image Scan'
+  - script: |
+      docker run -d --name netflix -p 8081:80 sachin2815/netflix:latest
+    displayName: 'Deploy to Container'
+  - task: PublishPipelineArtifact@1
+    inputs:
+      targetPath: '$(Pipeline.Workspace)'
+      artifact: 'logs'
+      publishLocation: 'pipeline'
+  - task: Email@1
+    inputs:
+      subject: "'$(Build.BuildId)'"
+      body: |
+        Project: $(Build.DefinitionName)<br/>
+        Build Number: $(Build.BuildId)<br/>
+        URL: $(Build.BuildUri)<br/>
+      to: 'sachin.singh.professional@gmail.com'
+      attachments: 'trivyfs.txt,trivyimage.txt'
